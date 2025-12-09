@@ -44,7 +44,10 @@ function RPMItems_CreateContent(parent)
     scrollFrame:SetPoint("TOPLEFT", 10, -10)
     scrollFrame:SetPoint("BOTTOMRIGHT", -30, 60)
     scrollFrame:EnableMouseWheel(true)
-
+    scrollFrame:SetScript("OnVerticalScroll", function(self, offset)
+        slider:SetValue(offset)
+    end)
+    
     -- Scroll slider
     slider = CreateFrame("Slider", "RPMItemsScrollBar", scrollFrame, "UIPanelScrollBarTemplate")
     slider:SetPoint("TOPLEFT", scrollFrame, "TOPRIGHT", 4, -16)
@@ -108,7 +111,7 @@ function RPMItems_CreateEditFrame()
     editFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     editFrame:SetFrameStrata("DIALOG")
     editFrame:SetBackdrop({
-        bgFile = "Interface\\AddOns\\RPMaster\\black",
+        bgFile = "Interface\\AddOns\\turtle-rp-master\\black",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
         tile = true, tileSize = 16, edgeSize = 32,
         insets = { left = 11, right = 12, top = 12, bottom = 11 }
@@ -202,6 +205,30 @@ function RPMItems_CreateEditFrame()
     end)
 end
 
+local function RPMItems_UpdateScrollRange()
+    if not scrollFrame or not scrollChild or not slider then return end
+
+    -- Met à jour les dimensions internes
+    scrollFrame:UpdateScrollChildRect()
+
+    -- Hauteur visible
+    local viewHeight = scrollFrame:GetHeight() or 0
+    -- Hauteur du contenu
+    local contentHeight = scrollChild:GetHeight() or 0
+
+    -- Distance totale scrollable (jamais négative)
+    local max = contentHeight - viewHeight
+    if max < 0 then max = 0 end
+
+    slider:SetMinMaxValues(0, max)
+
+    -- Optionnel : remet en haut à chaque refresh
+    if slider:GetValue() > max then
+        slider:SetValue(max)
+    end
+end
+
+
 -- Common WoW icon list
 local iconList = {
     -- Notes, Scrolls, Letters
@@ -264,7 +291,7 @@ function RPMItems_CreateIconPicker()
     iconPickerFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     iconPickerFrame:SetFrameStrata("DIALOG")
     iconPickerFrame:SetBackdrop({
-        bgFile = "Interface\\AddOns\\RPMaster\\black",
+        bgFile = "Interface\\AddOns\\turtle-rp-master\\black",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
         tile = true, tileSize = 16, edgeSize = 32,
         insets = { left = 11, right = 12, top = 12, bottom = 11 }
@@ -288,6 +315,7 @@ function RPMItems_CreateIconPicker()
     local iconScrollFrame = CreateFrame("ScrollFrame", "RPMItemsIconScrollFrame", iconPickerFrame, "UIPanelScrollFrameTemplate")
     iconScrollFrame:SetPoint("TOPLEFT", 20, -50)
     iconScrollFrame:SetPoint("BOTTOMRIGHT", -40, 20)
+
 
     local iconScrollChild = CreateFrame("Frame", nil, iconScrollFrame)
     iconScrollChild:SetWidth(320)
@@ -493,7 +521,7 @@ function RPMItems_RefreshItemList()
         local itemFrame = CreateFrame("Frame", nil, scrollChild)
         itemFrame:SetWidth(580)
         itemFrame:SetHeight(50)
-        itemFrame:SetPoint("TOPLEFT", 10, yOffset)
+        itemFrame:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
 
         local bg = itemFrame:CreateTexture(nil, "BACKGROUND")
         bg:SetAllPoints()
@@ -537,42 +565,189 @@ function RPMItems_RefreshItemList()
     end
 
     scrollChild:SetHeight(math.max(1, itemCount * 60))
+    RPMItems_UpdateScrollRange()
 end
+
+-- Give Item Frame (created once, reused)
+local giveItemFrame = nil
+local currentGiveItem = nil
 
 -- Function: Player selector for giving item
 function RPMItems_ShowPlayerSelector(item)
     Log("ShowPlayerSelector called for item: " .. tostring(item.name))
+    currentGiveItem = item
 
-    -- Create edit box for player name input
-    StaticPopupDialogs["RPMASTER_GIVE_ITEM"] = {
-        text = "Enter player name to give '" .. item.name .. "':",
-        button1 = "Give",
-        button2 = "Cancel",
-        hasEditBox = 1,
-        timeout = 0,
-        whileDead = 1,
-        hideOnEscape = 1,
-        OnAccept = function()
-            local playerName = getglobal(this:GetParent():GetName().."EditBox"):GetText()
-            if playerName and playerName ~= "" then
-                RPMItems_GiveItemToPlayer(item, playerName)
+    -- Create frame if it doesn't exist
+    if not giveItemFrame then
+        giveItemFrame = CreateFrame("Frame", "RPMasterGiveItemFrame", UIParent)
+        giveItemFrame:SetWidth(400)
+        giveItemFrame:SetHeight(320)
+        giveItemFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+        giveItemFrame:SetBackdrop({
+            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+            tile = true, tileSize = 32, edgeSize = 32,
+            insets = { left = 11, right = 12, top = 12, bottom = 11 }
+        })
+        giveItemFrame:SetBackdropColor(0, 0, 0, 1)
+        giveItemFrame:SetMovable(true)
+        giveItemFrame:SetFrameStrata("DIALOG")
+        giveItemFrame:EnableMouse(true)
+
+        -- Title
+        local title = giveItemFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        title:SetPoint("TOP", 0, -15)
+        title:SetText("Give Item to Player")
+        giveItemFrame.title = title
+
+        -- Item name label
+        local itemLabel = giveItemFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        itemLabel:SetPoint("TOPLEFT", 20, -50)
+        itemLabel:SetText("Item:")
+
+        local itemName = giveItemFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        itemName:SetPoint("LEFT", itemLabel, "RIGHT", 5, 0)
+        itemName:SetText("")
+        giveItemFrame.itemName = itemName
+
+        -- Player dropdown label
+        local playerLabel = giveItemFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        playerLabel:SetPoint("TOPLEFT", 20, -85)
+        playerLabel:SetText("Player:")
+
+        -- Player dropdown
+        local playerDropdown = CreateFrame("Frame", "RPMGivePlayerDropdown", giveItemFrame, "UIDropDownMenuTemplate")
+        playerDropdown:SetPoint("TOPLEFT", 70, -80)
+        UIDropDownMenu_SetWidth(280, playerDropdown)
+        giveItemFrame.playerDropdown = playerDropdown
+
+        -- Message label
+        local messageLabel = giveItemFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        messageLabel:SetPoint("TOPLEFT", 20, -130)
+        messageLabel:SetText("Message (optional):")
+
+        -- Message edit box
+        local messageEdit = CreateFrame("EditBox", nil, giveItemFrame)
+        messageEdit:SetPoint("TOPLEFT", 20, -155)
+        messageEdit:SetWidth(360)
+        messageEdit:SetHeight(80)
+        messageEdit:SetMultiLine(true)
+        messageEdit:SetAutoFocus(false)
+        messageEdit:SetFontObject(GameFontHighlight)
+        messageEdit:SetBackdrop({
+            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = true, tileSize = 16, edgeSize = 16,
+            insets = { left = 4, right = 4, top = 4, bottom = 4 }
+        })
+        messageEdit:SetBackdropColor(0, 0, 0, 0.8)
+        messageEdit:SetText("You found this item, check /rpplayer")
+        messageEdit:SetMaxLetters(255)
+        messageEdit:SetScript("OnEscapePressed", function() 
+            messageEdit:ClearFocus()
+        end)
+        giveItemFrame.messageEdit = messageEdit
+
+        -- Give button
+        local giveBtn = CreateFrame("Button", nil, giveItemFrame, "UIPanelButtonTemplate")
+        giveBtn:SetWidth(100)
+        giveBtn:SetHeight(25)
+        giveBtn:SetPoint("BOTTOMRIGHT", -20, 15)
+        giveBtn:SetText("Give Item")
+        giveBtn:SetScript("OnClick", function()
+            local selectedPlayer = UIDropDownMenu_GetText(playerDropdown)
+            local message = messageEdit:GetText()
+
+            if selectedPlayer and selectedPlayer ~= "" then
+                RPMItems_GiveItemToPlayer(currentGiveItem, selectedPlayer, message)
+                giveItemFrame:Hide()
             else
-                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[RPMaster]|r No player name entered!", 1, 0, 0)
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[RPMaster]|r Please select a player!", 1, 0, 0)
             end
-        end,
-        EditBoxOnEnterPressed = function()
-            local playerName = getglobal(this:GetParent():GetName().."EditBox"):GetText()
-            if playerName and playerName ~= "" then
-                RPMItems_GiveItemToPlayer(item, playerName)
-            end
-            this:GetParent():Hide()
-        end,
-        EditBoxOnEscapePressed = function()
-            this:GetParent():Hide()
-        end,
-    }
+        end)
 
-    StaticPopup_Show("RPMASTER_GIVE_ITEM")
+        -- Cancel button
+        local cancelBtn = CreateFrame("Button", nil, giveItemFrame, "UIPanelButtonTemplate")
+        cancelBtn:SetWidth(100)
+        cancelBtn:SetHeight(25)
+        cancelBtn:SetPoint("RIGHT", giveBtn, "LEFT", -10, 0)
+        cancelBtn:SetText("Cancel")
+        cancelBtn:SetScript("OnClick", function()
+            giveItemFrame:Hide()
+        end)
+
+        -- Close button
+        local closeBtn = CreateFrame("Button", nil, giveItemFrame, "UIPanelCloseButton")
+        closeBtn:SetPoint("TOPRIGHT", -5, -5)
+
+        -- Make draggable
+        giveItemFrame:SetScript("OnMouseDown", function()
+            this:StartMoving()
+        end)
+        giveItemFrame:SetScript("OnMouseUp", function()
+            this:StopMovingOrSizing()
+        end)
+    end
+
+    -- Update item name
+    giveItemFrame.itemName:SetText(item.name)
+
+    -- Populate dropdown with raid members
+    UIDropDownMenu_Initialize(giveItemFrame.playerDropdown, function()
+        if GetNumRaidMembers() > 0 then
+            -- Raid mode
+            for i = 1, GetNumRaidMembers() do
+                local name = GetRaidRosterInfo(i)
+                if name then
+                    local info = {}
+                    info.text = name
+                    info.value = name
+                    -- Create closure-safe reference
+                    do
+                        local playerName = name
+                        info.func = function()
+                            UIDropDownMenu_SetSelectedValue(giveItemFrame.playerDropdown, playerName)
+                            UIDropDownMenu_SetText(playerName, giveItemFrame.playerDropdown)
+                        end
+                    end
+                    UIDropDownMenu_AddButton(info)
+                end
+            end
+        elseif GetNumPartyMembers() > 0 then
+            -- Party mode
+            for i = 1, GetNumPartyMembers() do
+                local name = UnitName("party"..i)
+                if name then
+                    local info = {}
+                    info.text = name
+                    info.value = name
+                    -- Create closure-safe reference
+                    do
+                        local playerName = name
+                        info.func = function()
+                            UIDropDownMenu_SetSelectedValue(giveItemFrame.playerDropdown, playerName)
+                            UIDropDownMenu_SetText(playerName, giveItemFrame.playerDropdown)
+                        end
+                    end
+                    UIDropDownMenu_AddButton(info)
+                end
+            end
+        else
+            -- No raid/party
+            local info = {}
+            info.text = "No raid or party members"
+            info.disabled = 1
+            UIDropDownMenu_AddButton(info)
+        end
+    end)
+
+    -- Reset dropdown
+    UIDropDownMenu_SetText("Select player...", giveItemFrame.playerDropdown)
+
+    -- Reset message to default
+    giveItemFrame.messageEdit:SetText("You found this item, check /rpplayer")
+
+    giveItemFrame:Show()
 end
 
 -- Base64 encoding (safe for transmission, no escape sequences)
@@ -631,10 +806,10 @@ local function Base64Encode(data)
 end
 
 -- Function: Send item to player
-function RPMItems_GiveItemToPlayer(item, playerName)
+function RPMItems_GiveItemToPlayer(item, playerName, customMessage)
     -- Use SendAddonMessage (always invisible)
-    -- Build raw message (playerName is not encoded since it can't have special chars)
-    local rawData = "GIVE|" .. playerName .. "|" .. tostring(item.id) .. "|" .. (item.name or "") .. "|" .. (item.icon or "") .. "|" .. (item.tooltip or "") .. "|" .. (item.content or "")
+    -- Format: GIVE|targetName|id|name|icon|tooltip|content|customMessage
+    local rawData = "GIVE|" .. playerName .. "|" .. tostring(item.id) .. "|" .. (item.name or "") .. "|" .. (item.icon or "") .. "|" .. (item.tooltip or "") .. "|" .. (item.content or "") .. "|" .. (customMessage or "")
 
     Log("Raw message before encoding: " .. rawData)
 

@@ -1,11 +1,12 @@
 ## Interface: 11200
 ## Title: RP Master
-## Notes: Addon pour le Maître du Jeu - Gestion des objets de quête RP
-## Author: Votre Nom
-## Version: artifact_v32
+## Notes: Game Master addon for creating and distributing RP quest items
+## Author: Erea
+## Version: 2025-12-09 19:27
 ## SavedVariables: RPMasterDB, RPMasterDebugLog
 
 Core.lua
 ItemLibrary.lua
 States.lua
 Monitor.lua
+black.tga

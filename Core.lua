@@ -2,8 +2,12 @@
 -- Modular architecture for RP Master addon
 
 local ADDON_NAME = "RPMaster"
-local ADDON_VERSION = "2025-12-07 21:40"
+local ADDON_VERSION = "2025-12-09 19:27"
 local ADDON_PREFIX = "RPMSTR"
+
+-- Immediate load message (fires when Core.lua is parsed)
+DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700[RP Master] Version: " .. ADDON_VERSION)
+DEFAULT_CHAT_FRAME:AddMessage("|cFF00FFFF[RP Master] Commands: /rpm, /rpm log")
 
 -- Debug logging system
 RPMasterDebugLog = RPMasterDebugLog or {}
@@ -18,7 +22,136 @@ local function Log(message)
     end
 end
 
+-- Base64 encoding/decoding for addon messages
+local base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local function Base64Decode(data)
+    if not data or data == "" then return "" end
+
+    -- Create reverse lookup table
+    local decode_table = {}
+    for i = 1, string.len(base64_chars) do
+        decode_table[string.sub(base64_chars, i, i)] = i - 1
+    end
+
+    local result = {}
+    local len = string.len(data)
+
+    for i = 1, len, 4 do
+        local c1 = decode_table[string.sub(data, i, i)] or 0
+        local c2 = decode_table[string.sub(data, i + 1, i + 1)] or 0
+        local c3 = decode_table[string.sub(data, i + 2, i + 2)] or 0
+        local c4 = decode_table[string.sub(data, i + 3, i + 3)] or 0
+
+        local n = c1 * 262144 + c2 * 4096 + c3 * 64 + c4
+
+        -- Use math.mod instead of mod (Lua 5.0)
+        local b1 = math.mod(math.floor(n / 65536), 256)
+        local b2 = math.mod(math.floor(n / 256), 256)
+        local b3 = math.mod(n, 256)
+
+        table.insert(result, string.char(b1))
+
+        if string.sub(data, i + 2, i + 2) ~= "=" then
+            table.insert(result, string.char(b2))
+        end
+
+        if string.sub(data, i + 3, i + 3) ~= "=" then
+            table.insert(result, string.char(b3))
+        end
+    end
+
+    return table.concat(result)
+end
+
+local function Base64Encode(data)
+    if not data or data == "" then return "" end
+
+    local result = {}
+    local len = string.len(data)
+
+    for i = 1, len, 3 do
+        local b1 = string.byte(data, i)
+        local b2 = string.byte(data, i + 1) or 0
+        local b3 = string.byte(data, i + 2) or 0
+
+        local n = b1 * 65536 + b2 * 256 + b3
+
+        -- Use math.mod instead of mod (Lua 5.0)
+        local c1 = math.mod(math.floor(n / 262144), 64) + 1
+        local c2 = math.mod(math.floor(n / 4096), 64) + 1
+        local c3 = math.mod(math.floor(n / 64), 64) + 1
+        local c4 = math.mod(n, 64) + 1
+
+        table.insert(result, string.sub(base64_chars, c1, c1))
+        table.insert(result, string.sub(base64_chars, c2, c2))
+
+        if i + 1 <= len then
+            table.insert(result, string.sub(base64_chars, c3, c3))
+        else
+            table.insert(result, "=")
+        end
+
+        if i + 2 <= len then
+            table.insert(result, string.sub(base64_chars, c4, c4))
+        else
+            table.insert(result, "=")
+        end
+    end
+
+    return table.concat(result)
+end
+
 Log("Core.lua loading...")
+
+-- Event handler for receiving GIVE_ACCEPT/GIVE_REJECT responses from players
+local gmEventFrame = CreateFrame("Frame")
+gmEventFrame:RegisterEvent("CHAT_MSG_ADDON")
+gmEventFrame:SetScript("OnEvent", function()
+    if event == "CHAT_MSG_ADDON" then
+        local prefix, encodedMessage, distribution, sender = arg1, arg2, arg3, arg4
+
+        if prefix ~= ADDON_PREFIX then
+            return
+        end
+
+        Log("CHAT_MSG_ADDON received from " .. tostring(sender))
+
+        -- Decode Base64 message
+        local message = Base64Decode(encodedMessage)
+
+        -- Parse pipe-delimited message
+        local parts = {}
+        for part in string.gfind(message, "([^|]+)") do
+            table.insert(parts, part)
+        end
+
+        local myName = UnitName("player")
+
+        if parts[1] == "GIVE_ACCEPT" then
+            -- Format: GIVE_ACCEPT|gmName|playerName|itemName
+            local targetGM = parts[2]
+            local playerName = parts[3]
+            local itemName = parts[4]
+
+            if targetGM == myName then
+                Log("GIVE_ACCEPT received: " .. playerName .. " accepted " .. itemName)
+                DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF00FF00[RP Master]|r %s accepted item: '%s'", playerName, itemName), 0, 1, 0)
+            end
+
+        elseif parts[1] == "GIVE_REJECT" then
+            -- Format: GIVE_REJECT|gmName|playerName|itemName
+            local targetGM = parts[2]
+            local playerName = parts[3]
+            local itemName = parts[4]
+
+            if targetGM == myName then
+                Log("GIVE_REJECT received: " .. playerName .. " declined " .. itemName)
+                DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFFF0000[RP Master]|r %s declined item: '%s'", playerName, itemName), 1, 0.5, 0)
+            end
+        end
+    end
+end)
 
 -- RPMasterDB will be initialized in PLAYER_LOGIN event
 -- (saved variables aren't available until after VARIABLES_LOADED)
@@ -34,7 +167,7 @@ RPMasterFrame:SetWidth(700)
 RPMasterFrame:SetHeight(500)
 RPMasterFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
 RPMasterFrame:SetBackdrop({
-    bgFile = "Interface\\AddOns\\RPMaster\\black",
+    bgFile = "Interface\\AddOns\\turtle-rp-master\\black",
     edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
     tile = true, tileSize = 16, edgeSize = 32,
     insets = { left = 11, right = 12, top = 12, bottom = 11 }
@@ -108,7 +241,7 @@ local function CreateTabButton(moduleName, index)
     tab:SetPoint("LEFT", (tabWidth + spacing) * (index - 1), 0)
 
     tab:SetBackdrop({
-        bgFile = "Interface\\AddOns\\RPMaster\\black",
+        bgFile = "Interface\\AddOns\\turtle-rp-master\\black",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         tile = true, tileSize = 16, edgeSize = 16,
         insets = { left = 4, right = 4, top = 4, bottom = 4 }
@@ -237,7 +370,7 @@ function RPM_DetachTab(tabName)
     detachedFrame:SetHeight(500)
     detachedFrame:SetPoint("CENTER", UIParent, "CENTER", 50, 50)
     detachedFrame:SetBackdrop({
-        bgFile = "Interface\\AddOns\\RPMaster\\black",
+        bgFile = "Interface\\AddOns\\turtle-rp-master\\black",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
         tile = true, tileSize = 16, edgeSize = 32,
         insets = { left = 11, right = 12, top = 12, bottom = 11 }
@@ -517,13 +650,16 @@ end
 
 -- Event frame for initialization
 local loadFrame = CreateFrame("Frame")
-loadFrame:RegisterEvent("PLAYER_LOGIN")
+loadFrame:RegisterEvent("VARIABLES_LOADED")
+loadFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+
+local variablesLoaded = false
+
 loadFrame:SetScript("OnEvent", function(self, event)
-    if event == "PLAYER_LOGIN" then
-        Log("PLAYER_LOGIN event fired")
+    if event == "VARIABLES_LOADED" then
+        Log("VARIABLES_LOADED event fired")
 
         -- Initialize RPMasterDB now that saved variables are loaded
-        -- (PLAYER_LOGIN fires after VARIABLES_LOADED)
         RPMasterDB = RPMasterDB or {
             itemLibrary = {},
             nextItemID = 1,
@@ -554,6 +690,14 @@ loadFrame:SetScript("OnEvent", function(self, event)
             RPMasterFrame:SetPoint(pos[1], UIParent, pos[2], pos[3], pos[4])
         end
 
+        variablesLoaded = true
+        self:UnregisterEvent("VARIABLES_LOADED")
+
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        if not variablesLoaded then
+            return
+        end
+
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700[RPMaster] Version: " .. ADDON_VERSION .. "|r")
         DEFAULT_CHAT_FRAME:AddMessage("|cFF00FFFF[RPMaster]|r Commands: /rpm, /rpm log", 0, 1, 1)
 
@@ -567,7 +711,7 @@ loadFrame:SetScript("OnEvent", function(self, event)
             end
         end)
 
-        self:UnregisterEvent("PLAYER_LOGIN")
+        self:UnregisterEvent("PLAYER_ENTERING_WORLD")
     end
 end)
 
