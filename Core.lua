@@ -1,170 +1,358 @@
+-- ============================================================================
 -- Core.lua - Main frame, tabs, and module registry for RPMaster
--- Modular architecture for RP Master addon
+-- ============================================================================
+-- PURPOSE: Provides the main UI framework, tab system, and module registration
+--          for the RP Master addon. Acts as the "shell" that hosts feature modules.
+--
+-- ARCHITECTURE: Modular plugin system
+--   - Core.lua creates the main window and tab bar
+--   - Feature modules (ItemLibrary.lua, States.lua, etc.) register themselves
+--   - Each module provides callbacks: createContent(), onShow(), onHide()
+--   - Tabs can be detached into separate windows
+--
+-- LUA VERSION: Lua 5.0 (WoW 1.12 environment)
+--   - No table.insert shorthand, use explicit syntax
+--   - Use table.getn(t) instead of #t for table length
+--   - Use string.gfind instead of string.gmatch
+--   - math.mod instead of % for modulo (though % works in expressions)
+--
+-- WOW API NOTES:
+--   - All UI elements are "Frames" (similar to DOM nodes or Swing components)
+--   - CreateFrame() is like document.createElement() or new JPanel()
+--   - Frames are global by default if given a string name
+--   - Event system is observer pattern: RegisterEvent() + OnEvent callback
+--   - No anonymous functions, use function() end syntax
+-- ============================================================================
 
+-- Import business logic libraries
+local objectDatabase = RequireObjectDatabase()
+local rpBusiness = RequireRPBusiness()
+local messaging = RequireMessaging()
+local encoding = RequireEncoding()
+
+-- ============================================================================
+-- CONSTANTS (local = file-scoped, like private static final in Java)
+-- ============================================================================
 local ADDON_NAME = "RPMaster"
-local ADDON_VERSION = "2025-12-09 19:27"
-local ADDON_PREFIX = "RPMSTR"
+-- Version info loaded from version.lua (loaded first in .toc)
+local ADDON_VERSION = RP_BUILD_TIME or "unknown"  -- Build timestamp
+local ADDON_PREFIX = messaging.ADDON_PREFIX  -- Use constant from messaging module
 
--- Immediate load message (fires when Core.lua is parsed)
+-- ============================================================================
+-- STARTUP MESSAGE
+-- ============================================================================
+-- Immediate load message (fires when Core.lua is parsed by the Lua interpreter)
+-- DEFAULT_CHAT_FRAME is a global WoW variable for the main chat window
+-- Color codes: |cAARRGGBB text |r (AA=alpha, RGB=color, |r resets)
+-- ============================================================================
 DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700[RP Master] Version: " .. ADDON_VERSION)
 DEFAULT_CHAT_FRAME:AddMessage("|cFF00FFFF[RP Master] Commands: /rpm, /rpm log")
 
--- Debug logging system
+-- ============================================================================
+-- DEBUG LOGGING SYSTEM
+-- ============================================================================
+-- GLOBAL saved variable (persisted to disk between sessions)
+-- Pattern: RPMasterDebugLog = RPMasterDebugLog or {}
+--   - If RPMasterDebugLog exists (loaded from SavedVariables), keep it
+--   - Otherwise initialize as empty table
+-- This is like: RPMasterDebugLog ??= new List<string>() in C#
+-- ============================================================================
 RPMasterDebugLog = RPMasterDebugLog or {}
 
+-- ============================================================================
+-- Log() - Internal logging function
+-- ============================================================================
+-- @param message: String to log (will be converted to string if not already)
+-- @returns: void
+-- BEHAVIOR:
+--   - Prepends timestamp to message
+--   - Appends to RPMasterDebugLog array
+--   - Keeps only last 500 entries (circular buffer pattern)
+-- USAGE: Log("Player clicked button")
+-- ============================================================================
 local function Log(message)
-    local timestamp = date("%H:%M:%S")
+    local timestamp = date("%H:%M:%S")  -- WoW global function, returns formatted time
     local logEntry = string.format("[%s] RPMaster: %s", timestamp, tostring(message))
-    table.insert(RPMasterDebugLog, logEntry)
-    -- Keep only last 500 entries to prevent bloat
+    table.insert(RPMasterDebugLog, logEntry)  -- Appends to end (Lua arrays are 1-indexed)
+
+    -- Circular buffer: Keep only last 500 entries to prevent SavedVariables file bloat
+    -- (Lua 5.0 uses table.getn() instead of # operator for array length)
     if table.getn(RPMasterDebugLog) > 500 then
-        table.remove(RPMasterDebugLog, 1)
+        table.remove(RPMasterDebugLog, 1)  -- Remove first element (index 1, not 0!)
     end
 end
 
--- Base64 encoding/decoding for addon messages
-local base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-
-local function Base64Decode(data)
-    if not data or data == "" then return "" end
-
-    -- Create reverse lookup table
-    local decode_table = {}
-    for i = 1, string.len(base64_chars) do
-        decode_table[string.sub(base64_chars, i, i)] = i - 1
-    end
-
-    local result = {}
-    local len = string.len(data)
-
-    for i = 1, len, 4 do
-        local c1 = decode_table[string.sub(data, i, i)] or 0
-        local c2 = decode_table[string.sub(data, i + 1, i + 1)] or 0
-        local c3 = decode_table[string.sub(data, i + 2, i + 2)] or 0
-        local c4 = decode_table[string.sub(data, i + 3, i + 3)] or 0
-
-        local n = c1 * 262144 + c2 * 4096 + c3 * 64 + c4
-
-        -- Use math.mod instead of mod (Lua 5.0)
-        local b1 = math.mod(math.floor(n / 65536), 256)
-        local b2 = math.mod(math.floor(n / 256), 256)
-        local b3 = math.mod(n, 256)
-
-        table.insert(result, string.char(b1))
-
-        if string.sub(data, i + 2, i + 2) ~= "=" then
-            table.insert(result, string.char(b2))
-        end
-
-        if string.sub(data, i + 3, i + 3) ~= "=" then
-            table.insert(result, string.char(b3))
-        end
-    end
-
-    return table.concat(result)
-end
-
-local function Base64Encode(data)
-    if not data or data == "" then return "" end
-
-    local result = {}
-    local len = string.len(data)
-
-    for i = 1, len, 3 do
-        local b1 = string.byte(data, i)
-        local b2 = string.byte(data, i + 1) or 0
-        local b3 = string.byte(data, i + 2) or 0
-
-        local n = b1 * 65536 + b2 * 256 + b3
-
-        -- Use math.mod instead of mod (Lua 5.0)
-        local c1 = math.mod(math.floor(n / 262144), 64) + 1
-        local c2 = math.mod(math.floor(n / 4096), 64) + 1
-        local c3 = math.mod(math.floor(n / 64), 64) + 1
-        local c4 = math.mod(n, 64) + 1
-
-        table.insert(result, string.sub(base64_chars, c1, c1))
-        table.insert(result, string.sub(base64_chars, c2, c2))
-
-        if i + 1 <= len then
-            table.insert(result, string.sub(base64_chars, c3, c3))
-        else
-            table.insert(result, "=")
-        end
-
-        if i + 2 <= len then
-            table.insert(result, string.sub(base64_chars, c4, c4))
-        else
-            table.insert(result, "=")
-        end
-    end
-
-    return table.concat(result)
-end
+-- Base64 encoding/decoding moved to turtle-rp-common/rp-business.lua
+-- Use rpBusiness.Base64Encode() and rpBusiness.Base64Decode()
 
 Log("Core.lua loading...")
 
--- Event handler for receiving GIVE_ACCEPT/GIVE_REJECT responses from players
-local gmEventFrame = CreateFrame("Frame")
-gmEventFrame:RegisterEvent("CHAT_MSG_ADDON")
-gmEventFrame:SetScript("OnEvent", function()
+-- ============================================================================
+-- EVENT HANDLER: CHAT_MSG_ADDON (Receiving addon messages from players)
+-- ============================================================================
+-- PURPOSE: Listen for player responses to GIVE requests (GIVE_ACCEPT/GIVE_REJECT)
+--          and database sync messages (DB_SYNC)
+--
+-- WOW EVENT SYSTEM:
+--   - Similar to addEventListener() in JavaScript or EventHandler in C#
+--   - CreateFrame() creates an invisible frame to act as event listener
+--   - RegisterEvent() subscribes to specific events
+--   - SetScript("OnEvent", callback) sets the handler function
+--
+-- GLOBAL VARIABLES IN EVENT CALLBACKS (Lua 5.0 pattern):
+--   - event: The event name (string)
+--   - arg1, arg2, arg3, etc.: Event-specific parameters
+--   - For CHAT_MSG_ADDON: arg1=prefix, arg2=message, arg3=distribution, arg4=sender
+--
+-- NOTE: In modern Lua/WoW versions, these would be function parameters
+-- ============================================================================
+local gmEventFrame = CreateFrame("Frame")  -- Invisible frame acts as event listener
+gmEventFrame:RegisterEvent("CHAT_MSG_ADDON")  -- Subscribe to addon message events
+gmEventFrame:SetScript("OnEvent", function()  -- Anonymous callback (can't access params in Lua 5.0)
     if event == "CHAT_MSG_ADDON" then
+        -- Extract event parameters (Lua 5.0 uses global arg1, arg2, etc. instead of function params)
         local prefix, encodedMessage, distribution, sender = arg1, arg2, arg3, arg4
 
+        -- Filter: Only process messages with our addon prefix
         if prefix ~= ADDON_PREFIX then
-            return
+            return  -- Ignore messages from other addons
         end
 
         Log("CHAT_MSG_ADDON received from " .. tostring(sender))
 
-        -- Decode Base64 message
-        local message = Base64Decode(encodedMessage)
+        -- Parse message using messaging module
+        -- Automatically handles Base64 decoding and caret-delimited parsing
+        local messageType, parts = messaging.ParseMessage(encodedMessage)
 
-        -- Parse pipe-delimited message
-        local parts = {}
-        for part in string.gfind(message, "([^|]+)") do
-            table.insert(parts, part)
-        end
+        -- Get current player's name (like "this" in Java)
+        local myName = UnitName("player")  -- WoW API: UnitName("player") returns your character name
 
-        local myName = UnitName("player")
+        -- Handle different message types (pattern similar to switch/case)
+        if messageType == messaging.MESSAGE_TYPES.GIVE_ACCEPT then
+            -- Format: GIVE_ACCEPT^gmName^playerName^itemName
+            -- Player accepted the item we gave them
+            local targetGM = parts[2]     -- Who the response is for
+            local playerName = parts[3]   -- Who accepted
+            local itemName = parts[4]     -- What they accepted
 
-        if parts[1] == "GIVE_ACCEPT" then
-            -- Format: GIVE_ACCEPT|gmName|playerName|itemName
-            local targetGM = parts[2]
-            local playerName = parts[3]
-            local itemName = parts[4]
-
-            if targetGM == myName then
+            if targetGM == myName then  -- Only show message if it's for us
                 Log("GIVE_ACCEPT received: " .. playerName .. " accepted " .. itemName)
+                -- Green message in chat
                 DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF00FF00[RP Master]|r %s accepted item: '%s'", playerName, itemName), 0, 1, 0)
             end
 
-        elseif parts[1] == "GIVE_REJECT" then
-            -- Format: GIVE_REJECT|gmName|playerName|itemName
+        elseif messageType == messaging.MESSAGE_TYPES.GIVE_REJECT then
+            -- Format: GIVE_REJECT^gmName^playerName^itemName
+            -- Player declined the item we gave them
             local targetGM = parts[2]
             local playerName = parts[3]
             local itemName = parts[4]
 
-            if targetGM == myName then
+            if targetGM == myName then  -- Only show message if it's for us
                 Log("GIVE_REJECT received: " .. playerName .. " declined " .. itemName)
+                -- Red/orange message in chat
                 DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFFF0000[RP Master]|r %s declined item: '%s'", playerName, itemName), 1, 0.5, 0)
             end
+
+        elseif messageType == messaging.MESSAGE_TYPES.RAID_WARNING then
+            -- Format: RAID_WARNING^playerName^message
+            -- Player action requested a raid warning to be sent
+            local playerName = parts[2]
+            local warningMessage = parts[3]
+
+            Log("RAID_WARNING request from " .. playerName .. ": " .. warningMessage)
+
+            -- Send raid warning (WoW 1.12: requires raid leader)
+            -- Note: WoW 1.12 doesn't have UnitIsRaidOfficer
+            if GetNumRaidMembers() > 0 and IsRaidLeader() then
+                SendChatMessage(warningMessage, "RAID_WARNING")
+                DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFFFD700[RP Master]|r Raid warning sent: '%s' (from %s)", warningMessage, playerName), 1, 1, 0)
+            else
+                -- Try to send anyway - if not allowed, game will block it
+                SendChatMessage(warningMessage, "RAID_WARNING")
+                if not IsRaidLeader() then
+                    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFFFAA00[RP Master]|r Attempted raid warning (may require raid leader): '%s' (from %s)", warningMessage, playerName), 1, 1, 0)
+                else
+                    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFFFD700[RP Master]|r Raid warning sent: '%s' (from %s)", warningMessage, playerName), 1, 1, 0)
+                end
+            end
+
+        -- ============================================================================
+        -- DATABASE SYNC MESSAGE HANDLING
+        -- ============================================================================
+        -- Handle DB_SYNC messages from players (sent by RPPlayer addon)
+        -- Format: "DB_SYNC^databaseId^databaseName^version^checksum^itemCount^item1Id^item1Guid^item1Name^item1Icon^item1Tooltip^item1Content^..."
+        -- This is a simplified version of the message structure - actual implementation will need to handle
+        -- sending/receiving multiple parts for large databases (like GIVE messages)
+        elseif messageType == messaging.MESSAGE_TYPES.DB_SYNC_START then
+            Log("DB_SYNC message received from player: " .. sender)
+            -- In a full implementation, we would process the database sync here
+            -- For now, we'll just log that we received it
+            DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF00FFFF[RP Master]|r Received DB_SYNC request from %s", sender), 0, 1, 1)
+
+        elseif messageType == messaging.MESSAGE_TYPES.STATUS_RESPONSE then
+            -- Format: STATUS_RESPONSE^requestId^playerVersion^syncStateEncoded^inventoryEncoded
+            local requestId = parts[2]
+            local playerVersion = parts[3]
+            local syncStateEncoded = parts[4]
+            local inventoryEncoded = parts[5]
+
+            Log("STATUS_RESPONSE received from " .. sender .. " (reqId: " .. tostring(requestId) .. ")")
+
+            -- Decode sync state (Base64)
+            local syncStateStr = encoding.Base64Decode(syncStateEncoded or "")
+            local syncParts = {}
+            if syncStateStr and syncStateStr ~= "" then
+                -- Parse caret-delimited sync state
+                local lastPos = 1
+                local msgLen = string.len(syncStateStr)
+                while lastPos <= msgLen do
+                    local caretPos = string.find(syncStateStr, "^", lastPos, true)
+                    if caretPos then
+                        local field = string.sub(syncStateStr, lastPos, caretPos - 1)
+                        table.insert(syncParts, field)
+                        lastPos = caretPos + 1
+                        if caretPos == msgLen then
+                            table.insert(syncParts, "")
+                            break
+                        end
+                    else
+                        local field = string.sub(syncStateStr, lastPos)
+                        table.insert(syncParts, field)
+                        break
+                    end
+                end
+            end
+
+            local syncState = nil
+            if table.getn(syncParts) >= 5 then
+                syncState = {
+                    databaseId = syncParts[1],
+                    databaseName = syncParts[2],
+                    version = tonumber(syncParts[3]) or 0,
+                    checksum = syncParts[4],
+                    lastSyncTime = tonumber(syncParts[5]) or 0
+                }
+            end
+
+            -- Decode inventory (Base64)
+            local inventoryStr = encoding.Base64Decode(inventoryEncoded or "")
+            local inventoryParts = {}
+            if inventoryStr and inventoryStr ~= "" then
+                -- Parse caret-delimited inventory
+                local lastPos = 1
+                local msgLen = string.len(inventoryStr)
+                while lastPos <= msgLen do
+                    local caretPos = string.find(inventoryStr, "^", lastPos, true)
+                    if caretPos then
+                        local field = string.sub(inventoryStr, lastPos, caretPos - 1)
+                        table.insert(inventoryParts, field)
+                        lastPos = caretPos + 1
+                        if caretPos == msgLen then
+                            table.insert(inventoryParts, "")
+                            break
+                        end
+                    else
+                        local field = string.sub(inventoryStr, lastPos)
+                        table.insert(inventoryParts, field)
+                        break
+                    end
+                end
+            end
+
+            local inventory = {}
+            for i = 1, 16 do
+                local guid = inventoryParts[i]
+                if guid and guid ~= "" then
+                    inventory[i] = guid
+                else
+                    inventory[i] = nil
+                end
+            end
+
+            -- Update player state
+            if not RPMMonitor_PlayerStates then
+                RPMMonitor_PlayerStates = {}
+            end
+
+            RPMMonitor_PlayerStates[sender] = {
+                version = playerVersion,
+                syncState = syncState,
+                inventory = inventory,
+                lastResponse = time(),
+                connected = true,
+                hasAddon = true
+            }
+
+            -- Mark request as responded
+            if RPMMonitor_PendingRequests and RPMMonitor_PendingRequests[requestId] then
+                if not RPMMonitor_PendingRequests[requestId].responded then
+                    RPMMonitor_PendingRequests[requestId].responded = {}
+                end
+                RPMMonitor_PendingRequests[requestId].responded[sender] = true
+            end
+
+            -- Update UI if Monitor tab is visible
+            if RPM_CurrentTab == "monitor" and RPMMonitor_UpdatePlayerRow then
+                RPMMonitor_UpdatePlayerRow(sender)
+            end
+
+            Log("Player state updated for " .. sender .. " (version: " .. tostring(playerVersion) .. ")")
         end
     end
 end)
 
+-- ============================================================================
+-- SAVED VARIABLES (Database)
+-- ============================================================================
 -- RPMasterDB will be initialized in PLAYER_LOGIN event
 -- (saved variables aren't available until after VARIABLES_LOADED)
+--
+-- IMPORTANT: SavedVariables are loaded asynchronously
+--   1. Code executes (this file is parsed)
+--   2. VARIABLES_LOADED event fires → SavedVariables are now available
+--   3. PLAYER_LOGIN event fires → Safe to use saved data
+--
+-- This is similar to async database loading in web apps
+-- ============================================================================
 
--- Module registry
-RPM_Modules = {}
-RPM_CurrentTab = nil
-RPM_DetachedFrames = {}
+-- ============================================================================
+-- MODULE REGISTRY (Plugin Architecture)
+-- ============================================================================
+-- DESIGN PATTERN: Plugin/Module system
+--   - Core.lua provides the shell (main window + tabs)
+--   - Feature modules (ItemLibrary.lua, States.lua, etc.) register themselves
+--   - Each module provides callbacks: createContent(), onShow(), onHide()
+--
+-- GLOBAL VARIABLES:
+--   - RPM_Modules: Dictionary of registered modules
+--   - RPM_CurrentTab: Name of currently active tab (string)
+--   - RPM_DetachedFrames: Dictionary of detached window frames
+--
+-- SIMILAR TO: Eclipse plugin system, VS Code extensions, WordPress plugins
+-- ============================================================================
+RPM_Modules = {}             -- Dictionary: moduleName -> {callbacks, content, etc.}
+RPM_CurrentTab = nil         -- String: Currently active tab name (e.g., "items")
+RPM_DetachedFrames = {}      -- Dictionary: moduleName -> detached Frame object
 
--- Main frame
-RPMasterFrame = CreateFrame("Frame", "RPMasterFrame", UIParent)
+-- ============================================================================
+-- MAIN WINDOW FRAME
+-- ============================================================================
+-- WOW FRAME SYSTEM:
+--   - Frames are UI containers (like JPanel in Java or div in HTML)
+--   - CreateFrame(type, name, parent) creates a new frame
+--   - type: "Frame", "Button", "EditBox", "ScrollFrame", etc.
+--   - name: Global variable name (optional, but useful for debugging)
+--   - parent: Parent frame (UIParent = top-level, like document.body)
+--
+-- COORDINATE SYSTEM:
+--   - Origin is bottom-left of parent
+--   - SetPoint() positions relative to parent or other frames
+--   - Format: SetPoint("ANCHOR", parent, "PARENT_ANCHOR", xOffset, yOffset)
+-- ============================================================================
+RPMasterFrame = CreateFrame("Frame", "RPMasterFrame", UIParent)  -- Creates global variable
 RPMasterFrame:SetWidth(700)
-RPMasterFrame:SetHeight(500)
+RPMasterFrame:SetHeight(1000)
 RPMasterFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
 RPMasterFrame:SetBackdrop({
     bgFile = "Interface\\AddOns\\turtle-rp-master\\black",
@@ -174,6 +362,9 @@ RPMasterFrame:SetBackdrop({
 })
 RPMasterFrame:SetBackdropColor(0, 0, 0, 1)
 RPMasterFrame:SetMovable(true)
+RPMasterFrame:SetResizable(true)  -- Enable resizing
+RPMasterFrame:SetMinResize(500, 400)  -- Minimum size
+RPMasterFrame:SetMaxResize(1200, 900)  -- Maximum size
 RPMasterFrame:Hide()
 
 -- Position will be loaded in PLAYER_LOGIN event
@@ -202,6 +393,25 @@ end)
 local closeBtn = CreateFrame("Button", nil, RPMasterFrame, "UIPanelCloseButton")
 closeBtn:SetPoint("TOPRIGHT", -5, -5)
 
+-- Resize button in bottom-right corner
+local resizeBtn = CreateFrame("Button", nil, RPMasterFrame)
+resizeBtn:SetPoint("BOTTOMRIGHT", RPMasterFrame, "BOTTOMRIGHT", -7, 7)
+resizeBtn:SetWidth(20)
+resizeBtn:SetHeight(20)
+resizeBtn:EnableMouse(true)
+resizeBtn:SetFrameStrata("HIGH")
+resizeBtn:SetFrameLevel(RPMasterFrame:GetFrameLevel() + 100)
+resizeBtn:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+resizeBtn:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+resizeBtn:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+resizeBtn:SetScript("OnMouseDown", function()
+    RPMasterFrame:StartSizing("BOTTOMRIGHT")
+end)
+resizeBtn:SetScript("OnMouseUp", function()
+    RPMasterFrame:StopMovingOrSizing()
+    RPM_SaveWindowPosition("main", RPMasterFrame)
+end)
+
 -- Tab bar container
 local tabBar = CreateFrame("Frame", "RPMTabBar", RPMasterFrame)
 tabBar:SetPoint("TOPLEFT", 15, -50)
@@ -213,19 +423,40 @@ local contentFrame = CreateFrame("Frame", "RPMContentFrame", RPMasterFrame)
 contentFrame:SetPoint("TOPLEFT", 15, -85)
 contentFrame:SetPoint("BOTTOMRIGHT", -15, 15)
 
--- Tab buttons
-RPM_TabButtons = {}
+-- ============================================================================
+-- TAB BUTTONS (Global registry)
+-- ============================================================================
+RPM_TabButtons = {}  -- Dictionary: moduleName -> tab Button frame
 
--- Function: Register a module
+-- ============================================================================
+-- RPM_RegisterModule() - Plugin registration function
+-- ============================================================================
+-- @param name: String - Module name (e.g., "items", "states")
+-- @param callbacks: Table - Module callbacks:
+--   - createContent(parentFrame): Called once to build the module's UI
+--   - onShow(): Called when tab becomes active
+--   - onHide(): Called when switching away from tab
+--
+-- CALLED BY: Each feature module at the end of their file
+--   Example: RPM_RegisterModule("items", {createContent = ..., onShow = ...})
+--
+-- LIFECYCLE:
+--   1. Module file loads → Calls RPM_RegisterModule()
+--   2. Core calls createContent() when tab is first shown
+--   3. Core calls onShow() when tab becomes active
+--   4. Core calls onHide() when switching tabs
+--
+-- SIMILAR TO: Unity's GameObject.AddComponent() or Angular's module registration
+-- ============================================================================
 function RPM_RegisterModule(name, callbacks)
     RPM_Modules[name] = {
-        name = name,
-        createContent = callbacks.createContent,
-        onShow = callbacks.onShow,
-        onHide = callbacks.onHide,
-        content = nil,
-        tabButton = nil,
-        detachButton = nil
+        name = name,                       -- Module identifier
+        createContent = callbacks.createContent,  -- Factory function
+        onShow = callbacks.onShow,         -- Activation callback
+        onHide = callbacks.onHide,         -- Deactivation callback
+        content = nil,                     -- Cached Frame (created lazily)
+        tabButton = nil,                   -- Tab button Frame
+        detachButton = nil                 -- Detach button Frame
     }
 end
 
@@ -291,61 +522,98 @@ local function CreateTabButton(moduleName, index)
     return tab
 end
 
--- Function: Switch to a tab
+-- ============================================================================
+-- RPM_SwitchTab() - Switch to a different tab
+-- ============================================================================
+-- @param tabName: String - Name of tab to switch to (e.g., "items")
+-- @returns: void
+--
+-- BEHAVIOR:
+--   1. Validate tab exists and is not detached
+--   2. Hide current tab (call onHide, hide UI)
+--   3. Show new tab (create UI if first time, call onShow)
+--   4. Update visual state (highlight active tab)
+--   5. Save preference to database
+--
+-- LAZY LOADING:
+--   - Tab content is only created on first access
+--   - module.content is nil until first shown
+--   - This is like lazy initialization in Java: if (content == null) { create() }
+--
+-- SIMILAR TO: React's component lifecycle (componentWillUnmount → componentDidMount)
+-- ============================================================================
 function RPM_SwitchTab(tabName)
+    -- Validation: Ensure database is loaded
     if not RPMasterDB then
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[RPMaster]|r RPMasterDB not initialized yet", 1, 0, 0)
         return
     end
 
+    -- Validation: Ensure module exists
     if not RPM_Modules[tabName] then
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[RPMaster]|r Unknown tab: "..tabName, 1, 0, 0)
         return
     end
 
-    -- Don't switch if tab is detached
+    -- If tab is detached, show the detached window instead
     if RPMasterDB.preferences.detachedTabs[tabName] then
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00[RPMaster]|r "..tabName.." is detached", 1, 1, 0)
+        local detachedFrame = RPM_DetachedFrames[tabName]
+        if detachedFrame then
+            detachedFrame:Show()
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00[RPMaster]|r Showing detached "..tabName.." window", 1, 1, 0)
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[RPMaster]|r Detached window not found for "..tabName, 1, 0, 0)
+        end
         return
     end
 
-    -- Hide current content
+    -- STEP 1: Hide current tab content
     if RPM_CurrentTab then
         local currentModule = RPM_Modules[RPM_CurrentTab]
+
+        -- Hide the UI frame
         if currentModule.content then
             currentModule.content:Hide()
         end
+
+        -- Call lifecycle callback (similar to componentWillUnmount)
         if currentModule.onHide then
             currentModule.onHide()
         end
-        -- Unhighlight tab
+
+        -- Unhighlight tab button (dim color)
         if currentModule.tabButton then
             currentModule.tabButton:SetBackdropColor(0.1, 0.1, 0.1, 1)
         end
     end
 
-    -- Show new content
+    -- STEP 2: Show new tab content
     local module = RPM_Modules[tabName]
+
+    -- Lazy loading: Create content on first access
     if not module.content then
-        -- Create content on first access
-        module.content = module.createContent(contentFrame)
+        module.content = module.createContent(contentFrame)  -- Factory pattern
     end
 
+    -- Parent the content frame to the main content area
     module.content:SetParent(contentFrame)
-    module.content:SetAllPoints(contentFrame)
+    module.content:SetAllPoints(contentFrame)  -- Fill parent
     module.content:Show()
 
+    -- Call lifecycle callback (similar to componentDidMount)
     if module.onShow then
         module.onShow()
     end
 
-    -- Highlight active tab
+    -- STEP 3: Update visual state
+    -- Highlight active tab button (brighter color)
     if module.tabButton then
         module.tabButton:SetBackdropColor(0.2, 0.2, 0.2, 1)
     end
 
-    RPM_CurrentTab = tabName
-    RPMasterDB.preferences.activeTab = tabName
+    -- STEP 4: Save state to database
+    RPM_CurrentTab = tabName  -- Update global state
+    RPMasterDB.preferences.activeTab = tabName  -- Persist to disk
 end
 
 -- Function: Detach a tab to separate window
@@ -425,9 +693,12 @@ function RPM_DetachTab(tabName)
         GameTooltip:Hide()
     end)
 
-    -- Close button
+    -- Close button (hides window but keeps it detached)
     local detachedCloseBtn = CreateFrame("Button", nil, detachedFrame, "UIPanelCloseButton")
     detachedCloseBtn:SetPoint("TOPRIGHT", -5, -5)
+    detachedCloseBtn:SetScript("OnClick", function()
+        detachedFrame:Hide()
+    end)
 
     -- Content container
     local detachedContent = CreateFrame("Frame", nil, detachedFrame)
@@ -443,9 +714,10 @@ function RPM_DetachTab(tabName)
         module.onShow()
     end
 
-    -- Hide tab button in main window
+    -- Keep tab button visible so user can click to show detached window
+    -- Visual indicator: change tab button color to show it's detached
     if module.tabButton then
-        module.tabButton:Hide()
+        module.tabButton:SetBackdropColor(0.15, 0.1, 0.2, 1)  -- Slightly purple tint for detached tabs
     end
 
     -- Save state
@@ -492,9 +764,9 @@ function RPM_ReattachTab(tabName)
         module.onHide()
     end
 
-    -- Show tab button
+    -- Reset tab button color (was purple when detached)
     if module.tabButton then
-        module.tabButton:Show()
+        module.tabButton:SetBackdropColor(0.1, 0.1, 0.1, 1)  -- Normal color
     end
 
     -- Destroy detached window
@@ -518,6 +790,17 @@ function RPM_SaveWindowPosition(windowName, frame)
     local point, relativeTo, relativePoint, xOfs, yOfs = frame:GetPoint()
     RPMasterDB.preferences.windowPositions[windowName] = {point, relativePoint, xOfs, yOfs}
 end
+
+-- Function: Handle window size changes
+RPMasterFrame:SetScript("OnSizeChanged", function()
+    -- Save the new size to preferences when the window is resized
+    if not RPMasterDB or not RPMasterDB.preferences then
+        return
+    end
+    local width = RPMasterFrame:GetWidth()
+    local height = RPMasterFrame:GetHeight()
+    RPMasterDB.preferences.windowSize = {width, height}
+end)
 
 -- Function: Initialize modules and tabs
 function RPM_InitializeModules()
@@ -613,6 +896,14 @@ function RPM_OpenMainFrame()
     end
 
     RPMasterFrame:Show()
+
+    -- Show all detached windows (they may have been hidden by close button)
+    for tabName, detachedFrame in pairs(RPM_DetachedFrames) do
+        if detachedFrame and RPMasterDB.preferences.detachedTabs[tabName] then
+            detachedFrame:Show()
+        end
+    end
+
     -- Refresh active tab if exists
     if RPM_CurrentTab and RPM_Modules[RPM_CurrentTab] and RPM_Modules[RPM_CurrentTab].onShow then
         RPM_Modules[RPM_CurrentTab].onShow()
@@ -683,11 +974,18 @@ loadFrame:SetScript("OnEvent", function(self, event)
             Log("preferences exists")
         end
 
-        -- Load saved main frame position
+-- Load saved main frame position
         if RPMasterDB.preferences.windowPositions.main then
             local pos = RPMasterDB.preferences.windowPositions.main
             RPMasterFrame:ClearAllPoints()
             RPMasterFrame:SetPoint(pos[1], UIParent, pos[2], pos[3], pos[4])
+        end
+
+        -- Load saved window size if available
+        if RPMasterDB.preferences.windowSize then
+            local width, height = unpack(RPMasterDB.preferences.windowSize)
+            RPMasterFrame:SetWidth(width)
+            RPMasterFrame:SetHeight(height)
         end
 
         variablesLoaded = true

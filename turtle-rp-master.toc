@@ -1,12 +1,28 @@
-## Interface: 11200
+﻿## Interface: 11200
 ## Title: RP Master
 ## Notes: Game Master addon for creating and distributing RP quest items
 ## Author: Erea
-## Version: 2025-12-09 19:27
+## Version: 1.0.0
 ## SavedVariables: RPMasterDB, RPMasterDebugLog
 
+#version lua file, generated during build process
+version.lua
+
+#common libraries
+logging.lua
+encoding.lua
+messaging.lua
+object-database.lua
+inventory.lua
+rp-business.lua
+rp-actions.lua
+
+#addon code
 Core.lua
+master-actions.lua
+ActionEditor.lua
+icon-list.lua
 ItemLibrary.lua
-States.lua
 Monitor.lua
+MinimapButton.lua
 black.tga
