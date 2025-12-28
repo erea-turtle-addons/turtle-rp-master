@@ -258,7 +258,7 @@ end
 function RPMItems_CreateEditFrame()
     editFrame = CreateFrame("Frame", "RPMItemsEditFrame", UIParent)
     editFrame:SetWidth(650)  -- Wider to accommodate content template columns
-    editFrame:SetHeight(600)  -- Content at bottom can overflow down
+    editFrame:SetHeight(650)  -- Increased to accommodate default handout text field
     editFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     editFrame:SetFrameStrata("DIALOG")
     editFrame:SetBackdrop({
@@ -361,13 +361,17 @@ function RPMItems_CreateEditFrame()
     tooltipEdit = CreateEditBox(editFrame, "Tooltip (short description):", -150, 60, true)
     tooltipEdit:SetMaxLetters(120)
 
+    -- Default handout text field
+    defaultHandoutTextEdit = CreateEditBox(editFrame, "Default handout text:", -220, 30, false)
+    defaultHandoutTextEdit:SetMaxLetters(255)
+
     -- Initial counter field
     local counterLabel = editFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    counterLabel:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 20, -220)
+    counterLabel:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 20, -270)
     counterLabel:SetText("Initial counter (optional, 0 = none):")
 
     initialCounterEdit = CreateFrame("EditBox", nil, editFrame, "InputBoxTemplate")
-    initialCounterEdit:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 240, -220 - 2)
+    initialCounterEdit:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 240, -270 - 2)
     initialCounterEdit:SetWidth(60)
     initialCounterEdit:SetHeight(25)
     initialCounterEdit:SetAutoFocus(false)
@@ -407,12 +411,12 @@ function RPMItems_CreateEditFrame()
 
     -- Actions section
     local actionsLabel = editFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    actionsLabel:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 20, -260)
+    actionsLabel:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 20, -310)
     actionsLabel:SetText("Actions:")
 
     -- Actions list frame
     actionsListFrame = CreateFrame("Frame", nil, editFrame)
-    actionsListFrame:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 20, -280)
+    actionsListFrame:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 20, -330)
     actionsListFrame:SetWidth(590)  -- Wider to match new frame width
     actionsListFrame:SetHeight(80)
 
@@ -436,11 +440,11 @@ function RPMItems_CreateEditFrame()
     -- Content fields at BOTTOM of form (two columns with copy buttons)
     -- Left column: Default Content
     local contentLabel = editFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    contentLabel:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 20, -380)
+    contentLabel:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 20, -430)
     contentLabel:SetText("Default content:")
 
     local contentContainer = CreateFrame("Frame", nil, editFrame)
-    contentContainer:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 20, -400)
+    contentContainer:SetPoint("TOPLEFT", editFrame, "TOPLEFT", 20, -450)
     contentContainer:SetWidth(260)  -- Wider for better readability
     contentContainer:SetHeight(200)
 
@@ -804,6 +808,7 @@ function RPMItems_OpenEditForm(item)
         nameEdit:SetText(item.name or "")
         iconEdit:SetText(item.icon or "Interface\\Icons\\INV_Misc_Note_01")
         tooltipEdit:SetText(item.tooltip or "")
+        defaultHandoutTextEdit:SetText(item.defaultHandoutText or "You found this item, check /rpplayer")
         contentEdit:SetText(item.content or "")
         contentTemplateEdit:SetText(item.contentTemplate or "")
         initialCounterEdit:SetText(tostring(item.initialCounter or 0))
@@ -829,6 +834,7 @@ function RPMItems_OpenEditForm(item)
         nameEdit:SetText("")
         iconEdit:SetText("Interface\\Icons\\INV_Misc_Note_01")
         tooltipEdit:SetText("")
+        defaultHandoutTextEdit:SetText("You found this item, check /rpplayer")
         contentEdit:SetText("")
         contentTemplateEdit:SetText("")
         initialCounterEdit:SetText("0")
@@ -868,6 +874,7 @@ function RPMItems_SaveItem()
     local content = contentEdit:GetText()
     local contentTemplate = contentTemplateEdit:GetText()
     local initialCounter = tonumber(initialCounterEdit:GetText()) or 0
+    local defaultHandoutText = defaultHandoutTextEdit:GetText()
 
     if name == "" then
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[RPMaster]|r Name is required!", 1, 0, 0)
@@ -918,7 +925,8 @@ function RPMItems_SaveItem()
                 content,
                 currentItemActions,
                 contentTemplate,
-                initialCounter
+                initialCounter,
+                defaultHandoutText
             )
             RPMasterDB.itemLibrary[itemID].id = itemID  -- Preserve ID for backward compatibility
 
@@ -937,7 +945,8 @@ function RPMItems_SaveItem()
             content,
             currentItemActions,
             contentTemplate,
-            initialCounter
+            initialCounter,
+            defaultHandoutText
         )
         newItem.id = RPMasterDB.nextItemID  -- Add ID for backward compatibility
 
@@ -1374,8 +1383,8 @@ function RPMItems_ShowPlayerSelector(item)
     -- Reset dropdown
     UIDropDownMenu_SetText("Select player...", giveItemFrame.playerDropdown)
 
-    -- Reset message to default
-    giveItemFrame.messageEdit:SetText("You found this item, check /rpplayer")
+    -- Reset message to item's default handout text
+    giveItemFrame.messageEdit:SetText(item.defaultHandoutText or "You found this item, check /rpplayer")
 
     giveItemFrame:Show()
 end
