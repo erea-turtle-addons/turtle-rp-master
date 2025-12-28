@@ -35,7 +35,8 @@ local encoding = RequireEncoding()
 -- ============================================================================
 local ADDON_NAME = "RPMaster"
 -- Version info loaded from version.lua (loaded first in .toc)
-local ADDON_VERSION = RP_BUILD_TIME or "unknown"  -- Build timestamp
+-- Show version tag unless it's the default "0.0.0", then show build time
+local ADDON_VERSION = (RP_VERSION_TAG and RP_VERSION_TAG ~= "0.0.0") and RP_VERSION_TAG or (RP_BUILD_TIME or "unknown")
 local ADDON_PREFIX = messaging.ADDON_PREFIX  -- Use constant from messaging module
 
 -- ============================================================================

@@ -2,7 +2,7 @@
 ## Title: RP Master
 ## Notes: Game Master addon for creating and distributing RP quest items
 ## Author: Erea
-## Version: 1.0.0
+## Version: 1.2.7
 ## SavedVariables: RPMasterDB, RPMasterDebugLog
 
 #version lua file, generated during build process
